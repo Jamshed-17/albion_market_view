@@ -18,14 +18,17 @@
         }
         .table-hover tbody tr:hover {
             background-color: rgba(0, 0, 0, 0.05);
+            cursor: pointer;
         }
         .item-name {
             font-family: monospace;
         }
+        .clickable-row {
+            cursor: pointer;
+        }
     </style>
 </head>
 <body class="bg-light">
-    <pre>{{ ITEM_NAME_MAP | tojson }}</pre>
     <div class="container py-4">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h1>Топ выгодных сделок</h1>
@@ -48,18 +51,18 @@
                     </thead>
                     <tbody>
                         {% for deal in deals %}
-                        <tr>
+                        <tr class="clickable-row" data-item-id="{{ deal.item_id }}">
                             <td class="item-name" title="{{ deal.item_id }}">
-                            {{ deal.item_name or ITEM_NAME_MAP[deal.item_id] or deal.item_id }}
+                                {{ deal.item_name or ITEM_NAME_MAP[deal.item_id] or deal.item_id }}
                             </td>
                             <td>{{ deal.buy_city }}</td>
-                            <td>{{ deal.buy_price|number_format(0) }}</td>
+                            <td class="numeric">{{ deal.buy_price|number_format(0) }}</td>
                             <td>{{ deal.sell_city }}</td>
-                            <td>{{ deal.sell_price|number_format(0) }}</td>
-                            <td class="profit-cell {% if deal.profit_after_tax > 5000 %}profit-high{% else %}profit-medium{% endif %}">
+                            <td class="numeric">{{ deal.sell_price|number_format(0) }}</td>
+                            <td class="numeric profit-cell {% if deal.profit_after_tax > 5000 %}profit-high{% else %}profit-medium{% endif %}">
                                 {{ deal.profit_after_tax|round|number_format(0) }}
                             </td>
-                            <td>{{ deal.roi|number_format(1) }}%</td>
+                            <td class="numeric">{{ deal.roi|number_format(1) }}%</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -78,7 +81,45 @@
                 pageLength: 25,
                 language: {
                     url: '//cdn.datatables.net/plug-ins/1.11.5/i18n/ru.json'
-                }
+                },
+                columnDefs: [
+                    { 
+                        targets: [2, 4], // Колонки с ценами (покупка и продажа)
+                        render: function(data, type) {
+                            if (type === 'sort' || type === 'type') {
+                                return data.replace(/\s/g, '').replace(',', '.');
+                            }
+                            return data;
+                        },
+                        type: 'num'
+                    },
+                    { 
+                        targets: 5, // Колонка с прибылью
+                        render: function(data, type) {
+                            if (type === 'sort' || type === 'type') {
+                                return data.replace(/\s/g, '').replace(',', '.');
+                            }
+                            return data;
+                        },
+                        type: 'num'
+                    },
+                    { 
+                        targets: 6, // Колонка ROI
+                        render: function(data, type) {
+                            if (type === 'sort' || type === 'type') {
+                                return parseFloat(data.replace('%', '').replace(',', '.'));
+                            }
+                            return data;
+                        },
+                        type: 'num'
+                    }
+                ]
+            });
+            
+            // Обработчик клика по строке
+            $('.clickable-row').on('click', function() {
+                const itemId = $(this).data('item-id');
+                window.location.href = '/item/' + encodeURIComponent(itemId);
             });
         });
     </script>

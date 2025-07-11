@@ -7,6 +7,7 @@ import time
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
 import threading
+from natsort import natsorted
 
 app = Flask(__name__)
 executor = ThreadPoolExecutor(4)
@@ -46,24 +47,30 @@ ALL_ITEMS = generate_item_list()
 ITEM_NAME_MAP = {}
 
 def fetch_item_names():
-    url = "https://raw.githubusercontent.com/broderickhyman/ao-bin-dumps/master/formatted/items.json"
     try:
-        resp = requests.get(url, timeout=15)
-        data = resp.json()
+        with open("data/items.json", "r", encoding="utf-8") as f:
+            data = json.load(f)
         mapping = {}
         for item in data:
-            uid = item.get("Name") or item.get("uniqueName") or item.get("ItemId")
-            # здесь поле с русской локализацией может быть в item['LocalizedNames']['RU']
-            ru = item.get("LocalizedNames", {}).get("RU") or item.get("LocalizableName_RU")
-            if uid and ru:
-                mapping[uid] = ru
-                base = uid.split('@')[0]
-                mapping.setdefault(base, ru)
+            if not isinstance(item, dict):
+                continue
+            uid = item.get("UniqueName")  # именно так в твоём JSON
+            localized = item.get("LocalizedNames")
+            if not isinstance(localized, dict):
+                localized = {}
+            ru_name = localized.get("RU-RU")
+            if uid and ru_name:
+                # Основной ID
+                mapping[uid] = ru_name
+                # Базовый ID без @X (если там есть @X, хотя в твоём примере его нет)
+                base_id = uid.split("@")[0]
+                if base_id not in mapping:
+                    mapping[base_id] = ru_name
         return mapping
     except Exception as e:
-        print("Не удалось скачать metadata items:", e)
+        print("❌ Не удалось открыть локальный файл items.json:", e)
         return {}
-
+    
 @lru_cache(maxsize=1000)
 def get_item_prices(item_id):
     url = f"https://europe.albion-online-data.com/api/v2/stats/prices/{item_id}.json"
@@ -124,7 +131,7 @@ def find_best_deals():
                 best_deals.extend(deals)
 
     list(executor.map(process_item, ALL_ITEMS))
-    best_deals_sorted = sorted(best_deals, key=lambda x: x['profit_after_tax'], reverse=True)
+    best_deals_sorted = natsorted(best_deals, key=lambda x: x['profit_after_tax'], reverse=True)
 
     for deal in best_deals_sorted:
         deal['item_name'] = ITEM_NAME_MAP.get(deal['item_id'], deal['item_id'])
@@ -165,6 +172,31 @@ def analyze():
                            plot_json=plot_json,
                            min_profit=min_profit)
 
+
+@app.route('/item/<item_id>')
+def item_analysis(item_id):
+    deals = analyze_item(item_id, MIN_PROFIT)
+    if not deals:
+        return render_template('index.html', items=ALL_ITEMS, ITEM_NAME_MAP=ITEM_NAME_MAP,
+                               error=f"Нет выгодных сделок для {item_id}")
+
+    prices = get_item_prices(item_id)
+    city_data = {city: {'buy': None, 'sell': None} for city in CITIES}
+    for price in prices:
+        city = price.get('city')
+        if city in CITIES:
+            if price.get('sell_price_min'):
+                city_data[city]['sell'] = price['sell_price_min']
+            if price.get('buy_price_max'):
+                city_data[city]['buy'] = price['buy_price_max']
+
+    plot_json = create_price_plot({'item_id': item_id, 'city_data': city_data})
+    return render_template('single_item.html',
+                           item_id=item_id,
+                           item_name=ITEM_NAME_MAP.get(item_id, item_id),
+                           deals=deals,
+                           plot_json=plot_json,
+                           min_profit=MIN_PROFIT)
 
 @app.route('/best-deals')
 def best_deals():
