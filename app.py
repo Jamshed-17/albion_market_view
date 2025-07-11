@@ -11,7 +11,6 @@ import threading
 app = Flask(__name__)
 executor = ThreadPoolExecutor(4)
 
-# Кастомные фильтры
 @app.template_filter('number_format')
 def number_format(value, decimal_places=0):
     try:
@@ -20,13 +19,11 @@ def number_format(value, decimal_places=0):
     except:
         return value
 
-# Конфигурация
 CITIES = ['Bridgewatch', 'Caerleon', 'Fort Sterling', 'Lymhurst', 'Martlock', 'Thetford', 'Black Market']
 TAX_RATE = 0.05
 MIN_PROFIT = 1000
-MAX_ITEMS = 500  # Лимит для демонстрации
+MAX_ITEMS = 500
 
-# Полный список категорий и предметов (упрощённая версия)
 ITEM_CATEGORIES = {
     'EQUIPMENT': ['HEAD', 'ARMOR', 'SHOES', 'BAG', 'CAPE'],
     'WEAPONS': ['SWORD', 'AXE', 'MACE', 'DAGGER', 'STAFF', 'BOW', 'CROSSBOW'],
@@ -34,35 +31,45 @@ ITEM_CATEGORIES = {
     'CONSUMABLES': ['POTION', 'FOOD']
 }
 
-# Генерация списка предметов
 def generate_item_list():
     items = []
     for category, subcategories in ITEM_CATEGORIES.items():
         for subcat in subcategories:
             for tier in range(4, 8):
                 items.append(f'T{tier}_{subcat}')
-                if tier > 4:  # Добавляем улучшенные версии
+                if tier > 4:
                     for enchant in range(1, 4):
                         items.append(f'T{tier}_{subcat}@{enchant}')
-    return items[:MAX_ITEMS]  # Ограничиваем для демонстрации
+    return items[:MAX_ITEMS]
 
 ALL_ITEMS = generate_item_list()
+ITEM_NAME_MAP = {}
 
-def get_all_albion_items():
-    url = "https://gameinfo.albiononline.com/api/gameinfo/items"
+def fetch_item_names():
+    url = "https://raw.githubusercontent.com/broderickhyman/ao-bin-dumps/master/formatted/items.json"
     try:
-        response = requests.get(url)
-        return response.json() if response.status_code == 200 else None
+        resp = requests.get(url, timeout=15)
+        data = resp.json()
+        mapping = {}
+        for item in data:
+            uid = item.get("Name") or item.get("uniqueName") or item.get("ItemId")
+            # здесь поле с русской локализацией может быть в item['LocalizedNames']['RU']
+            ru = item.get("LocalizedNames", {}).get("RU") or item.get("LocalizableName_RU")
+            if uid and ru:
+                mapping[uid] = ru
+                base = uid.split('@')[0]
+                mapping.setdefault(base, ru)
+        return mapping
     except Exception as e:
-        print(f"Error fetching items: {e}")
-        return None
+        print("Не удалось скачать metadata items:", e)
+        return {}
 
 @lru_cache(maxsize=1000)
 def get_item_prices(item_id):
     url = f"https://europe.albion-online-data.com/api/v2/stats/prices/{item_id}.json"
     try:
         response = requests.get(url, timeout=10)
-        time.sleep(0.2)  # Задержка для API
+        time.sleep(0.2)
         return response.json() if response.status_code == 200 else None
     except:
         return None
@@ -73,7 +80,7 @@ def analyze_item(item_id, min_profit=1000):
         return None
 
     city_data = {city: {'buy': None, 'sell': None} for city in CITIES}
-    
+
     for price in prices:
         city = price.get('city')
         if city in CITIES:
@@ -85,15 +92,15 @@ def analyze_item(item_id, min_profit=1000):
     deals = []
     for buy_city, buy_data in city_data.items():
         for sell_city, sell_data in city_data.items():
-            if (buy_data['sell'] and sell_data['buy'] and 
-                sell_data['buy'] > buy_data['sell']):
+            if buy_data['sell'] and sell_data['buy'] and sell_data['buy'] > buy_data['sell']:
                 profit = sell_data['buy'] - buy_data['sell']
                 profit_after_tax = profit * (1 - TAX_RATE)
                 roi = (profit / buy_data['sell']) * 100
-                
+
                 if profit_after_tax >= min_profit:
                     deals.append({
                         'item_id': item_id,
+                        'item_name': ITEM_NAME_MAP.get(item_id, item_id),
                         'buy_city': buy_city,
                         'buy_price': buy_data['sell'],
                         'sell_city': sell_city,
@@ -109,34 +116,37 @@ def analyze_item(item_id, min_profit=1000):
 def find_best_deals():
     best_deals = []
     lock = threading.Lock()
-    
+
     def process_item(item):
         deals = analyze_item(item, MIN_PROFIT)
         if deals:
             with lock:
                 best_deals.extend(deals)
-    
-    # Параллельная обработка предметов
+
     list(executor.map(process_item, ALL_ITEMS))
-    
-    # Сортируем все сделки по прибыли
     best_deals_sorted = sorted(best_deals, key=lambda x: x['profit_after_tax'], reverse=True)
-    return best_deals_sorted[:100]  # Топ-100 сделок
+
+    for deal in best_deals_sorted:
+        deal['item_name'] = ITEM_NAME_MAP.get(deal['item_id'], deal['item_id'])
+
+    return best_deals_sorted[:100]
 
 @app.route('/')
 def index():
-    return render_template('index.html', items=ALL_ITEMS[:50])  # Показываем только часть для выбора
+    return render_template('index.html', items=ALL_ITEMS[:50], ITEM_NAME_MAP=ITEM_NAME_MAP)
+
+
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
     item_id = request.form.get('item_id')
     min_profit = int(request.form.get('min_profit', 1000))
-    
+
     deals = analyze_item(item_id, min_profit)
     if not deals:
-        return render_template('index.html', items=ALL_ITEMS, error=f"No profitable deals found for {item_id}")
-    
-    # Подготовка данных для графика
+        return render_template('index.html', items=ALL_ITEMS, ITEM_NAME_MAP=ITEM_NAME_MAP,
+                               error=f"Нет выгодных сделок для {item_id}")
+
     prices = get_item_prices(item_id)
     city_data = {city: {'buy': None, 'sell': None} for city in CITIES}
     for price in prices:
@@ -146,24 +156,27 @@ def analyze():
                 city_data[city]['sell'] = price['sell_price_min']
             if price.get('buy_price_max'):
                 city_data[city]['buy'] = price['buy_price_max']
-    
+
     plot_json = create_price_plot({'item_id': item_id, 'city_data': city_data})
-    return render_template('single_item.html', 
-                         item_id=item_id,
-                         deals=deals,
-                         plot_json=plot_json,
-                         min_profit=min_profit)
+    return render_template('single_item.html',
+                           item_id=item_id,
+                           item_name=ITEM_NAME_MAP.get(item_id, item_id),
+                           deals=deals,
+                           plot_json=plot_json,
+                           min_profit=min_profit)
+
 
 @app.route('/best-deals')
 def best_deals():
     deals = find_best_deals()
-    return render_template('best_deals.html', deals=deals)
+    return render_template('best_deals.html', deals=deals, ITEM_NAME_MAP=ITEM_NAME_MAP)
+
 
 def create_price_plot(item_data):
     cities = []
     sell_prices = []
     buy_prices = []
-    
+
     for city, data in item_data['city_data'].items():
         if data['sell'] or data['buy']:
             cities.append(city)
@@ -171,7 +184,7 @@ def create_price_plot(item_data):
             buy_prices.append(data['buy'] if data['buy'] else None)
 
     fig = go.Figure()
-    
+
     fig.add_trace(go.Bar(
         x=cities,
         y=sell_prices,
@@ -179,7 +192,7 @@ def create_price_plot(item_data):
         marker_color='rgb(214, 39, 40)',
         opacity=0.8
     ))
-    
+
     fig.add_trace(go.Bar(
         x=cities,
         y=buy_prices,
@@ -202,6 +215,7 @@ def create_price_plot(item_data):
     return json.dumps(fig, cls=PlotlyJSONEncoder)
 
 if __name__ == '__main__':
+    ITEM_NAME_MAP = fetch_item_names()
     port = 5000
     while True:
         try:

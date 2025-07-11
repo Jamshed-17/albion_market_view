@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -25,6 +25,7 @@
     </style>
 </head>
 <body class="bg-light">
+    <pre>{{ ITEM_NAME_MAP | tojson }}</pre>
     <div class="container py-4">
         <div class="d-flex justify-content-between align-items-center mb-4">
             <h1>Топ выгодных сделок</h1>
@@ -48,7 +49,9 @@
                     <tbody>
                         {% for deal in deals %}
                         <tr>
-                            <td class="item-name">{{ deal.item_id }}</td>
+                            <td class="item-name" title="{{ deal.item_id }}">
+                            {{ deal.item_name or ITEM_NAME_MAP[deal.item_id] or deal.item_id }}
+                            </td>
                             <td>{{ deal.buy_city }}</td>
                             <td>{{ deal.buy_price|number_format(0) }}</td>
                             <td>{{ deal.sell_city }}</td>
